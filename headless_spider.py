@@ -1,10 +1,50 @@
 from selenium import webdriver
 from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.firefox.options import Options
-from tinydb import TinyDB, Query
+import sqlite3
 import time
-from furl import furl
 import json
+import subprocess
+from bs4 import BeautifulSoup
+
+def parseBreadcrumb(cont):
+  soup = BeautifulSoup(cont, 'html.parser')
+  """ search for div container with class container-breadcrumb """
+  breadcrumb = soup.find("div", { "class" : "container-breadcrumb" })
+  #print (breadcrumb)
+  soup = BeautifulSoup(str(breadcrumb), 'html.parser')
+  text = soup.get_text()
+  text=text.strip()
+  text=text.replace("\n", "")
+  text=text.replace("\t", "")
+  text=text.replace("  ", "")
+  return text
+
+def parseSpecs(cont):
+  l=list()
+  soup = BeautifulSoup(cont, 'html.parser')
+  specs = soup.find("table", id="pdp-specifications-table")
+  soupb = BeautifulSoup(str(specs), 'html.parser')
+  attr_list=soupb.find_all('tr')
+  for el in attr_list:
+    soupc = BeautifulSoup(str(el), 'html.parser')
+    attr_name_tag=soupc.find('th')
+    attr_name=attr_name_tag.get_text()
+    atrr_name=str(attr_name).strip()
+    attr_value_tag=soupc.find('td')
+    attr_value=attr_value_tag.get_text()
+    attr_value=str(attr_value).strip()
+    print ("attr_name:", "Specifications - "+attr_name, ", attr_value:", attr_value)
+    #print ("*el:*", el)
+    l.append([attr_name, attr_value])
+  return l 
+
+
+def parseCatalog(source):
+  soup = BeautifulSoup(cont, 'html.parser')
+  specs = soup.find("table", id="pdp-catalog-table")
+
+
 
 def getFilename(url):
   url=str(url)
@@ -18,6 +58,12 @@ def getFilename(url):
    pass
    print ("error, incorrect url")
 
+  
+  
+  #looking for attribute and value
+  
+
+   
 
 def saveUrl(url, filename, sourcex):
   if filename=="":
@@ -36,53 +82,48 @@ def saveUrl(url, filename, sourcex):
 
 def sameDomain(url, url_ref):
   if url.strip().find(url_ref)==0:
-    return '1'
+    return 1
   else:
-    return '0'
-
-def to_absolute(url, base):
-    """If given ``url`` is a relative path,
-    make it relative to the ``base``.
-    """
-    furled = furl(url)
-    if not furled.scheme:
-        return furl(base).join(url).url
-    return url
-
-
-def is_same_origin(*urls):
-    """Check whether URLs are from the same origin (host:port)."""
-    origins = set(url.netloc for url in map(furl, urls))
-    return len(origins) <= 1
+    return 0
 
 
 def ParseProductPage(source_page):
   print ("ok")
     
 def getPageLinks(extUrl):
-  #print ("url:", extUrl)
+  print ("url:", extUrl)
 
   links=set()
   options = Options()
   options.headless = True
   driver = webdriver.Firefox(options=options, executable_path=r'/usr/bin/geckodriver')
-  driver.get(extUrl) 
+  driver.get(extUrl)
+  time.sleep(15) 
   source_page=driver.page_source
   #print ("source_page:", source_page)
 
   """save the downloaded url for future analyze"""
   saveUrl(extUrl, "", source_page)
 
-  """open small local .json db for rapid indexed search and easy data manipulation"""
-  db = TinyDB('db.json')
-  Urls = Query()
+  """open small local sqlite db for rapid indexed search and easy data manipulation"""
+  conn = sqlite3.connect('data.db')
+  c = conn.cursor()
+  db_url=""
   #check if the url in database!?
-  resp_dbi=db.search(Urls.url == str(extUrl))
-  if str(resp_dbi)=="[]":
-    db.insert({'url': str(extUrl), 'same_domain': '1', 'downloaded':'1', 'tmst':str( int(time.time()) ) })
-  else:
-    db.update({'downloaded':'1', 'tmst':str( int(time.time()) )}, Urls.url == str(extUrl))
+  for row in c.execute("select url from links where url ='"+str(extUrl)+"'"):
+    db_url = row[0]
+    #print ("*db_url", db_url)
 
+  if db_url=="" and str(extUrl)!="":
+    qi="insert into links(url, same_domain, downloaded, tmst) values ('"+str(extUrl)+"', 1, 1, '"+str( int(time.time()) )+"')"
+    #print ("qix:", qi)
+    c.execute(qi)
+    conn.commit()
+  if db_url!="" and str(extUrl)!="":
+    qu="update links set same_domain=1, downloaded=1, tmst='"+str( int(time.time()) )+"' WHERE url= '"+str(extUrl)+"'"
+    c.execute(qu)
+    conn.commit()
+ 
   """search for links"""
   continue_link = driver.find_element_by_tag_name('a')
   elems = driver.find_elements_by_xpath("//a[@href]")
@@ -95,25 +136,48 @@ def getPageLinks(extUrl):
   for link in links:  
     #print("url", link)
     same_domain=sameDomain(link, 'https://www.thermofisher.com/')
-    resp_db=db.search(Urls.url == str(link))
-    if str(resp_db)=="[]":
-      db.insert({'url': str(url), 'same_domain': same_domain, 'downloaded':'0', 'tmst':''})
+    dbxu_url=""
+    cursor = c.execute("select url from links where url='"+str(link).strip()+"'")
+    for row in cursor:
+      dbxu_url=row[0]
+    
+    #print ("dbxu_url", dbxu_url)
+    if dbxu_url=="" and link!="":
+      try:
+        qi="insert into links(url, downloaded, same_domain, tmst) values ('"+str(link)+"', 0, "+str(same_domain)+",  '')"
+        #print ("qi:", qi)
+        c.execute(qi)
+        conn.commit()
+      except ValueError as e:
+        pass
+        #print link+" url already existing into db" #sqlite3.IntegrityError: UNIQUE constraint failed: links.url
+        print ('My exception occurred, value:', e.value)
+      
+
     """parse product attributes"""
     if "/product/" in url:
-      getParseProductPage(source_page)
+      getParseProductPage(source_page)      
+ 
+  """close the http connection""" 
+  driver.quit()
+  subprocess.call("killall -9 /usr/lib/firefox/firefox", shell=True)
+  subprocess.call("killall -9 /usr/bin/geckodriver", shell=True)
+
 
 
   """get the next URLs from database"""
-  resp_dbi=db.search( (Urls.same_domain == '1') &  (Urls.downloaded == '0'))[0]
-  resp_dbi=str(resp_dbi).replace("'", "\"")
-  #print ("resp_dbi:", resp_dbi)
-  text = json.loads(resp_dbi.strip())
-  #print ("search url:", text['url'])
-  getPageLinks(text['url'])
+  dbx_url=""
+  for row in c.execute("select url from links where same_domain='1' and downloaded = 0"):
+    dbx_url = row[0]
+
+  c.close()
+  conn.close()
   
 
-  """close the http connection""" 
-  driver.quit()
+  print ("dbx_url:", dbx_url)
+  getPageLinks(dbx_url)
+  
+
 
 #init the crawler
 url='https://www.thermofisher.com/uk/en/home/order/lab-instruments-equipment.html'
